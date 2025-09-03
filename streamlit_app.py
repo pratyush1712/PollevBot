@@ -21,6 +21,7 @@ class BotThread(threading.Thread):
         login_type: str,
         lifetime: float,
         log_queue: "queue.Queue[str]",
+        token: str
     ) -> None:
         super().__init__(daemon=True)
         self._stop_event = threading.Event()
@@ -32,7 +33,7 @@ class BotThread(threading.Thread):
             lifetime=lifetime,
         )
         self._log_queue = log_queue
-
+        self._token = token
     # ---------------------------------------------------------------------
     # Public helpers
     # ---------------------------------------------------------------------
@@ -44,40 +45,40 @@ class BotThread(threading.Thread):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _log(self, msg: str) -> None:
-        """Push *msg* to the log queue along with a timestamp."""
+    def _log(self, msg: str, level: str = "INFO") -> None:
+        """Push *msg* to the log queue along with a timestamp and level."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        self._log_queue.put(f"[{timestamp}] {msg}")
+        self._log_queue.put(f"[{timestamp}] [{level}] {msg}")
 
     # ------------------------------------------------------------------
     # Thread entry point
     # ------------------------------------------------------------------
     def run(self) -> None:  # noqa: D401 – Simple imperative is fine here.
-        self._log("Bot initialising …")
+        self._log("Bot initialising …", "INFO")
         try:
             self._bot.login()
             token = self._bot.get_firehose_token()
         except Exception as exc:  # pylint: disable=broad-except
-            self._log(f"Login failed: {exc}")
+            self._log(f"Login failed: {exc}", "ERROR")
             return
 
-        self._log("Login successful. Bot is now watching for polls …")
+        self._log("Login successful. Bot is now watching for polls …", "SUCCESS")
 
         while not self._stop_event.is_set() and self._bot.alive():
-            self._log("Checking for new polls …")
+            self._log("Checking for new polls …", "DEBUG")
             poll_id: Optional[str] = self._bot.get_new_poll_id(token)
 
             if poll_id is None:
-                self._log("No new polls detected – sleeping …")
+                self._log("No new polls detected – sleeping …", "DEBUG")
                 time.sleep(self._bot.closed_wait)
                 continue
 
-            self._log(f"Detected new poll {poll_id}. Waiting to answer …")
+            self._log(f"Detected new poll {poll_id}. Waiting to answer …", "POLL")
             time.sleep(self._bot.open_wait)
             response = self._bot.answer_poll(poll_id)
-            self._log(f"Answered poll → {response}")
+            self._log(f"Answered poll → {response}", "SUCCESS")
 
-        self._log("Bot stopped.")
+        self._log("Bot stopped.", "INFO")
 
 
 # -------------------------------------------------------------------------
@@ -122,6 +123,21 @@ def flush_logs() -> None:
         st.session_state["logs"].append(log_queue.get())
 
 
+def colorize_log_line(log_line: str) -> str:
+    """Add color coding to log lines based on their level."""
+    if "[ERROR]" in log_line:
+        return f"<span style='color: red;'>{log_line}</span><br>"
+    elif "[SUCCESS]" in log_line:
+        return f"<span style='color: green;'>{log_line}</span><br>"
+    elif "[POLL]" in log_line:
+        return f"<span style='color: yellow;'>{log_line}</span><br>"
+    elif "[DEBUG]" in log_line:
+        return f"<span style='color: white;'>{log_line}</span><br>"
+    elif "[INFO]" in log_line:
+        return f"<span style='color: blue;'>{log_line}</span><br>"
+    else:
+        return f"<span style='color: white;'>{log_line}</span><br>"
+
 # -------------------------------------------------------------------------
 # UI layout
 # -------------------------------------------------------------------------
@@ -156,6 +172,7 @@ def credentials_form() -> None:
 
         # Instantiate objects and save into session state —––––––––––––––––––––––
         log_q: "queue.Queue[str]" = queue.Queue()
+        token = uuid4().hex
         bot_thread = BotThread(
             user=user,
             password=password,
@@ -163,21 +180,23 @@ def credentials_form() -> None:
             login_type=login_type,
             lifetime=float(lifetime),
             log_queue=log_q,
+            token=token
         )
         bot_thread.start()
 
         # Create unique token and store in global manager
-        token = uuid4().hex
         manager = get_bot_manager()
         manager[token] = {"thread": bot_thread, "log_queue": log_q}
 
         # Persist token in URL and session state
-        st.query_params.token = token
+        st.query_params["token"] = token
         st.session_state["token"] = token
         st.session_state["bot_thread"] = bot_thread
         st.session_state["log_queue"] = log_q
 
         st.success("Bot started! Scroll down to see real-time logs.")
+        # display the token in the url
+        st.write(f"Token: {token}")
         st.rerun()
 
 
@@ -205,18 +224,16 @@ def running_layout() -> None:
     # Periodically refresh the logs.
     flush_logs()
 
-    # Display newest entries at the top.
+    # Display newest entries at the top with color coding.
     ordered_logs = list(reversed(st.session_state["logs"]))
+    colorized_logs = [colorize_log_line(log) for log in ordered_logs]
+    console_output = "<div style='border: 1px solid #ffffff; background-color: black; padding: 10px; border-radius: 10px; font-family: monospace; flex-grow: 1; max-height: 60vh; overflow-y: auto;'>"
+    for entry in colorized_logs:
+        console_output += f"{entry}"
+    console_output += "</div>"
+    st.html(body=console_output)
+# 
 
-    # Use a scrollable text area for better UX.
-    st.text_area(
-        label="Logs",
-        value="\n".join(ordered_logs),
-        height=400,
-        key="log_area",
-    )
-
-    # Auto-refresh every 2 seconds while running.
     time.sleep(2)
     st.rerun()
 
