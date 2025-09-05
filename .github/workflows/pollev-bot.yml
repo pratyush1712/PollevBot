@@ -1,0 +1,124 @@
+name: PollEv Bot Runner
+
+on:
+  schedule:
+    # Run every Monday at 1:30 PM EST (18:30 UTC during EST, 17:30 UTC during EDT)
+    # Note: GitHub Actions uses UTC time, so we need to adjust for EST
+    - cron: '30 18 * * 1'  # Monday 1:30 PM EST (6:30 PM UTC)
+    - cron: '30 18 * * 3'  # Wednesday 1:30 PM EST (6:30 PM UTC)
+    # Alternative for EDT (Daylight Saving Time):
+    # - cron: '30 17 * * 1'  # Monday 1:30 PM EDT (5:30 PM UTC)
+    # - cron: '30 17 * * 3'  # Wednesday 1:30 PM EDT (5:30 PM UTC)
+  
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      runtime_minutes:
+        description: 'Runtime in minutes'
+        required: false
+        default: '75'
+        type: string
+
+jobs:
+  run-pollev-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90  # Safety timeout (slightly longer than 75 minutes)
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Set runtime duration
+      id: set-runtime
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "RUNTIME_MINUTES=${{ github.event.inputs.runtime_minutes }}" >> $GITHUB_ENV
+        else
+          echo "RUNTIME_MINUTES=75" >> $GITHUB_ENV
+        fi
+        echo "Runtime set to: $RUNTIME_MINUTES minutes"
+        
+    - name: Run PollEv Bot
+      env:
+        EMAIL: ${{ secrets.POLLEV_EMAIL }}
+        PASSWORD: ${{ secrets.POLLEV_PASSWORD }}
+        HOST: ${{ secrets.POLLEV_HOST }}
+      run: |
+        echo "Starting PollEv bot for $RUNTIME_MINUTES minutes..."
+        echo "Current time: $(date)"
+        echo "Bot will stop at: $(date -d "+$RUNTIME_MINUTES minutes")"
+        
+        # Start the bot in background
+        python pollev.py &
+        BOT_PID=$!
+        
+        echo "Bot started with PID: $BOT_PID"
+        
+        # Convert minutes to seconds
+        RUNTIME_SECONDS=$((RUNTIME_MINUTES * 60))
+        
+        # Monitor for the specified duration
+        START_TIME=$(date +%s)
+        
+        while [ $(($(date +%s) - START_TIME)) -lt $RUNTIME_SECONDS ]; do
+          # Check if bot process is still running
+          if ! kill -0 $BOT_PID 2>/dev/null; then
+            echo "Bot process terminated unexpectedly"
+            exit 1
+          fi
+          
+          # Log progress every 15 minutes
+          ELAPSED=$(($(date +%s) - START_TIME))
+          if [ $((ELAPSED % 900)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+            REMAINING_MINUTES=$(((RUNTIME_SECONDS - ELAPSED) / 60))
+            echo "Bot running... $REMAINING_MINUTES minutes remaining"
+          fi
+          
+          sleep 30
+        done
+        
+        echo "Runtime of $RUNTIME_MINUTES minutes completed"
+        echo "Stopping bot process..."
+        
+        # Gracefully terminate the bot
+        if kill -0 $BOT_PID 2>/dev/null; then
+          kill -TERM $BOT_PID
+          
+          # Wait up to 30 seconds for graceful shutdown
+          for i in {1..30}; do
+            if ! kill -0 $BOT_PID 2>/dev/null; then
+              echo "Bot terminated gracefully"
+              break
+            fi
+            sleep 1
+          done
+          
+          # Force kill if still running
+          if kill -0 $BOT_PID 2>/dev/null; then
+            echo "Force killing bot process"
+            kill -KILL $BOT_PID
+          fi
+        fi
+        
+        echo "Bot execution completed at: $(date)"
+        
+    - name: Upload logs (if any)
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: pollev-bot-logs-${{ github.run_number }}
+        path: |
+          *.log
+          logs/
+        retention-days: 30
