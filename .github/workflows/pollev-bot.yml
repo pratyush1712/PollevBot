@@ -115,7 +115,7 @@ jobs:
         
     - name: Upload logs (if any)
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: pollev-bot-logs-${{ github.run_number }}
         path: |
