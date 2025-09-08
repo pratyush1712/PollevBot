@@ -4,8 +4,8 @@ on:
   schedule:
     # Run every Monday at 1:30 PM EST (18:30 UTC during EST, 17:30 UTC during EDT)
     # Note: GitHub Actions uses UTC time, so we need to adjust for EST
-    - cron: '30 18 * * 1'  # Monday 1:30 PM EST (6:30 PM UTC)
-    - cron: '30 18 * * 3'  # Wednesday 1:30 PM EST (6:30 PM UTC)
+    - cron: '30 17 * * 1'  # Monday 1:30 PM EDT (5:30 PM UTC)
+    - cron: '30 17 * * 3'  # Wednesday 1:30 PM EDT (5:30 PM UTC)
     # Alternative for EDT (Daylight Saving Time):
     # - cron: '30 17 * * 1'  # Monday 1:30 PM EDT (5:30 PM UTC)
     # - cron: '30 17 * * 3'  # Wednesday 1:30 PM EDT (5:30 PM UTC)
